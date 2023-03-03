@@ -34,6 +34,8 @@ class Player:
         The bot running the player.
     guild : discord.Guild
         The guild associated with the player. Each player is responsible for only one guild.
+    is_playing : bool
+        Whether or not the player is currently connected to a voice channel.
 
     FINISHED_EVENT : int
         An event signaling the run task to be stopped.
@@ -43,8 +45,6 @@ class Player:
         The queue of the songs to play. Each song is a string url.
     _run_task : asyncio.Task
         The run loop of a single voice channel session. Joins voice channel, plays songs from queue and disconnects afterwrards.
-    _is_playing : bool
-        Whether or not the player is currently connected to a voice channel.
     _ytdl : YoutubeDL
         The YoutubeDL downloader.
     """
@@ -54,11 +54,11 @@ class Player:
 
         self.client = client
         self.guild = guild
+        self.is_playing = False
 
         self._ytdl = yt_dlp.YoutubeDL(YTDL_FORMAT_OPTIONS)
         self._queue = asyncio.Queue()
         self._run_events = asyncio.Queue()
-        self._is_playing = False
         self._run_task = None
 
     async def queue_song(self, song: str) -> bool:
@@ -69,12 +69,7 @@ class Player:
         song : str
             The url of the song to play. Needs to be playable by youtube-dl.
         """
-        print("queueing song: ", song)
         await self._queue.put(song)
-        if not self._is_playing:
-            asyncio.create_task(self._start_playing())
-            return True
-        return False
 
     async def stop_playing(self):
         """Stops the run loop."""
@@ -84,78 +79,53 @@ class Player:
         """Sends skip song event to the run loop."""
         await self._run_events.put(self.SKIPPED_EVENT)
 
-    async def _run(self):
-        """The player's run loop, responsible for a single session in a voice channel."""
-        try:
-            voice_channel = self.guild.voice_client
-            print("Joining voice channel: ", voice_channel.channel)
+    async def start_playing(self, channel: discord.VoiceChannel):
+        """Creates the run loop task and manages and sets is_playing flag.
 
-            value = dict()
-            while True:
-                try:
-                    url = await asyncio.wait_for(self.queue.get(), QUITE_A_WHILE)
-                except TimeoutError:
-                    await self._leave_voice()
-                    return
+        Paramters
+        ---------
+        channel: discord.VoiceChannel
+            The voice channel to connect to.
+        """
+        self.is_playing = True
+        self._run_task = asyncio.create_task(self._run(channel))
+        self._run_task.add_done_callback(self._cleanup_run_task)
 
-                filename = await self._download_url(url)
-                voice_channel.play(discord.FFmpegPCMAudio(filename, **FFMPEG_OPTIONS), after=self._callback)
+    def _cleanup_run_task(self, _):
+        asyncio.create_task(self.guild.voice_client.disconnect())
+        self.is_playing = False
+        self._run_task = None
+        self._queue = asyncio.Queue()
 
-                # handles external events 
-                event = await self._run_events.get()
-                if event == self.SKIPPED_EVENT:
-                    voice_channel.stop()
-                elif event == self.FINISHED_EVENT:
-                    pass # finished song, skipping to next one
+    async def _run(self, voice_channel: discord.VoiceChannel):
+        """The player's run loop, responsible for a single session in a voice channel.
 
-        except asyncio.CancelledError:
-            print("resetting player")
-            self._is_playing = False
-            await self._leave_voice()
-            self._queue = asyncio.Queue()
-            raise asyncio.CancelledError
-
-    async def _join_voice(self, user: discord.Member):
-        """Joins a user's voice channel. Returns False if user not in any voice channel.
-        
         Parameters
         ----------
-        user : discord.Member
-            The user who's connected voice channel to join to.
+        voice_channel : discord.VoiceChannel
+            The voice channel to join.
         """
-        if not self._is_playing:
-            if not user.voice:
-                return False
-            await user.voice.channel.connect()
-            print("Joined voice channel")
-            return True
+        await voice_channel.connect()
+        voice_client = self.guild.voice_client
 
-    async def _leave_voice(self) -> bool:
-        """Disconnects from voice channel and sets is_playing flag.
-        Returns True if not connected to any channel.
-        """
-        self._is_playing = False
-        if not self.guild.voice_client:
-            return False
-        await self.guild.voice_client.disconnect()
-        return True
+        while True:
+            try:
+                url = await asyncio.wait_for(self._queue.get(), QUITE_A_WHILE)
+            except TimeoutError:
+                raise asyncio.CancelledError
 
-    async def _start_playing(self):
-        """Creates the run loop task and manages and sets is_playing flag."""
-        print("Starting run loop")
-        self._is_playing = True
-        self._run_task = asyncio.create_task(self._run())
-        try:
-            await self._run_task
-        except asyncio.CancelledError:
-            print("Run loop stopped")
+            filename = await self._download_url(url)
+            voice_client.play(
+                    discord.FFmpegPCMAudio(filename, **FFMPEG_OPTIONS),
+                    after=lambda _: asyncio.create_task(self._run_events.put(self.FINISHED_EVENT)))
 
-    def _callback(self, err):
-        """Called at the end of a song and sends event to run loop."""
-        if err:
-            print(err)
+            event = await self._run_events.get()
+            if event == self.SKIPPED_EVENT:
+                voice_client.stop()
+                await self._run_events.get() # skip finished signal for skipped song
+            elif event == self.FINISHED_EVENT:
+                pass
 
-        asyncio.run(self._run_events.put(self.FINISHED_EVENT))
 
     async def _download_url(self, url: str) -> str:
         """Processes the URL of a song and returns the URL of the audio to be used in FFMPEG.
@@ -165,7 +135,9 @@ class Player:
         url : str
             The URL of the song to
         """
-        data = await self.client.loop.run_in_executor(None, lambda: self._ytdl.extract_info(url, download=False))
+        data = await asyncio.get_running_loop().run_in_executor(
+                None,
+                lambda: self._ytdl.extract_info(url, download=False))
 
         if 'entries' in data:
             # first item from playlist
@@ -192,11 +164,12 @@ class Music(commands.Cog):
     @commands.Cog.listener()
     async def on_ready(self):
         """Creates players for all servers the bot is in."""
-        self.players = {guild: Player(self, guild) for guild in self.guilds}
-        print("---Music cog ready, connected to servers---")
-        for guild in self.players.keys():
-            print(f"\t{guild.name}")
-        print("---")
+        print("Initializing music cog...")
+        for guild in self.bot.guilds:
+            print(f"Creating player for {guild.name}...", end="")
+            self.players[guild] = Player(self, guild)
+            print("Done")
+        print("Music cog ready")
 
     @commands.Cog.listener()
     async def on_guild_join(self, guild):
@@ -227,33 +200,38 @@ class Music(commands.Cog):
     @app_commands.command()
     async def play(self, interaction: discord.Interaction, url: str):
         """Plays a song by URL. If a song is already playing it will be queued."""
-        player = bot.players[interaction.guild]
-        err = await player._join_voice(interaction.user)
-        if err:
-            print(err)
+        print("Play command started...")
+        player = self.players[interaction.guild]
+
+        if not interaction.user.voice and not player.is_playing:
+            await interaction.response.send_message("You need to be in a voice channel to start a play session.")
+            print("User not connected to any voice channel.")
             return
-        first_in_queue = await player.queue_song(url)
-        if first_in_queue:
-            print("Playing url: ", url)
+
+        await player.queue_song(url)
+        if not player.is_playing:
+            await player.start_playing(interaction.user.voice.channel)
             await interaction.response.send_message(f"Now playing {url}")
+            print("Playing url: ", url)
         else:
-            print("Queuing url: ", url)
             await interaction.response.send_message(f"Queued song {url}")
+            print("Queuing url: ", url)
 
     @app_commands.command()
     async def stop(self, interaction: discord.Interaction):
         """Stops the music player."""
         print("Stopping player")
-        player = bot.players[interaction.guild]
+        player = self.players[interaction.guild]
         await player.stop_playing()
         await interaction.response.send_message(f"Stopped playing")
 
     @app_commands.command()
     async def skip(self, interaction: discord.Interaction):
         """Skips the current playing song."""
-        print("Skipping song")
-        player = bot.players[interaction.guild]
+        print("Skipping song...")
+        player = self.players[interaction.guild]
         await player.skip_song()
+        print("Skip message sent")
         await interaction.response.send_message(f"Skipped song")
 
 class Bot(commands.Bot):
@@ -262,14 +240,21 @@ class Bot(commands.Bot):
         intents.message_content = True
         super().__init__(command_prefix="!", intents=intents)
 
+    def on_ready(self):
+        print("Bot ready!")
+
 
 async def main():
+    print("Creating bot...")
     bot = Bot()
+    print("Loading configuration file...")
     with open("config.yaml") as config_file:
         config = yaml.safe_load(config_file)
 
     async with bot:
+        print("Adding music cog...")
         await bot.add_cog(Music(bot))
+        print("Starting bot...")
         await bot.start(config["secret_token"])
 
 asyncio.run(main())
