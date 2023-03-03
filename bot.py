@@ -175,30 +175,44 @@ class Player:
 
 
 class Music(commands.Cog):
-    def __init__(self, bot):
+    """This is the practical implementation of the music bot.
+    It is responsible for managing the music players for the various guilds, and manage commands.
+
+    Attributes
+    ----------
+    bot : commands.Bot
+        A reference to the bot.
+    players : Dict[discord.Guild, Player]
+        A dictionary of all servers connected and their respective music players.
+    """
+    def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.players = None
+        self.players = dict()
 
     @commands.Cog.listener()
     async def on_ready(self):
+        """Creates players for all servers the bot is in."""
         self.players = {guild: Player(self, guild) for guild in self.guilds}
-        print("---Music cog ready, connected to servers--")
+        print("---Music cog ready, connected to servers---")
         for guild in self.players.keys():
             print(f"\t{guild.name}")
         print("---")
 
     @commands.Cog.listener()
     async def on_guild_join(self, guild):
+        """Automatically creates new players for new guilds during runtime."""
         print("Guild joined:", guild)
         self.players[guild] = Player(self, guild)
 
     @commands.Cog.listener()
     async def on_guild_remove(self, guild):
+        """Automatically delete players when removed from guilds."""
         print("Guild exited:", guild)
         del self.players[guild]
 
     @commands.command()
     async def sync(self, ctx):
+        """Syncs new slash commands to discord. This should be run when adding, removing or changing slash commands."""
         print("---Synching slash commands---")
         synced = await self.bot.tree.sync()
         for command in synced:
@@ -207,24 +221,12 @@ class Music(commands.Cog):
 
     @commands.command()
     async def set_bot_channel(self, ctx, *, channel: discord.TextChannel):
+        """Sets the main text channel for the bot. All messages should be set to this designated channel."""
         pass
 
     @app_commands.command()
-    async def stop(self, interaction: discord.Interaction):
-        print("Stopping player")
-        player = bot.players[interaction.guild]
-        await player.stop_playing()
-        await interaction.response.send_message(f"Stopped playing")
-
-    @app_commands.command()
-    async def skip(self, interaction: discord.Interaction):
-        print("Skipping song")
-        player = bot.players[interaction.guild]
-        await player.skip_song()
-        await interaction.response.send_message(f"Skipped song")
-
-    @app_commands.command()
     async def play(self, interaction: discord.Interaction, url: str):
+        """Plays a song by URL. If a song is already playing it will be queued."""
         player = bot.players[interaction.guild]
         err = await player._join_voice(interaction.user)
         if err:
@@ -237,6 +239,22 @@ class Music(commands.Cog):
         else:
             print("Queuing url: ", url)
             await interaction.response.send_message(f"Queued song {url}")
+
+    @app_commands.command()
+    async def stop(self, interaction: discord.Interaction):
+        """Stops the music player."""
+        print("Stopping player")
+        player = bot.players[interaction.guild]
+        await player.stop_playing()
+        await interaction.response.send_message(f"Stopped playing")
+
+    @app_commands.command()
+    async def skip(self, interaction: discord.Interaction):
+        """Skips the current playing song."""
+        print("Skipping song")
+        player = bot.players[interaction.guild]
+        await player.skip_song()
+        await interaction.response.send_message(f"Skipped song")
 
 class Bot(commands.Bot):
     def __init__(self):
