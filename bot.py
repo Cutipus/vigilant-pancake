@@ -201,10 +201,10 @@ class Music(commands.Cog):
             print(f"\t{command}")
         print("---")
 
-    @commands.command()
-    async def set_bot_channel(self, ctx, *, channel: discord.TextChannel):
-        """Sets the main text channel for the bot. All messages should be set to this designated channel."""
-        pass
+    #@commands.command()
+    #async def set_bot_channel(self, ctx, *, channel: discord.TextChannel):
+    #    """Sets the main text channel for the bot. All messages should be set to this designated channel."""
+    #    pass
 
     @app_commands.command()
     async def play(self, interaction: discord.Interaction, url: str):
