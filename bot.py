@@ -51,14 +51,15 @@ class Player:
     def __init__(self, client: commands.Bot, guild: discord.Guild):
         self.FINISHED_EVENT = 0
         self.SKIPPED_EVENT = 1
+        self.QUEUE_EVENT = 2
+        self.STOPPED_PLAYING_EVENT = 3
 
         self.client = client
         self.guild = guild
         self.is_playing = False
 
-        self._ytdl = yt_dlp.YoutubeDL(YTDL_FORMAT_OPTIONS)
-        self._queue = asyncio.Queue()
         self._run_events = asyncio.Queue()
+        self._ytdl = yt_dlp.YoutubeDL(YTDL_FORMAT_OPTIONS)
         self._run_task = None
 
     async def queue_song(self, song: str) -> bool:
@@ -69,15 +70,15 @@ class Player:
         song : str
             The url of the song to play. Needs to be playable by youtube-dl.
         """
-        await self._queue.put(song)
+        await self._run_events.put([self.QUEUE_EVENT, song])
 
     async def stop_playing(self):
         """Stops the run loop."""
-        self._run_task.cancel()
+        await self._run_events.put([self.STOP_PLAYING_EVENT])
 
     async def skip_song(self):
         """Sends skip song event to the run loop."""
-        await self._run_events.put(self.SKIPPED_EVENT)
+        await self._run_events.put([self.SKIPPED_EVENT])
 
     async def start_playing(self, channel: discord.VoiceChannel):
         """Creates the run loop task and manages and sets is_playing flag.
@@ -89,13 +90,6 @@ class Player:
         """
         self.is_playing = True
         self._run_task = asyncio.create_task(self._run(channel))
-        self._run_task.add_done_callback(self._cleanup_run_task)
-
-    def _cleanup_run_task(self, _):
-        asyncio.create_task(self.guild.voice_client.disconnect())
-        self.is_playing = False
-        self._run_task = None
-        self._queue = asyncio.Queue()
 
     async def _run(self, voice_channel: discord.VoiceChannel):
         """The player's run loop, responsible for a single session in a voice channel.
@@ -105,27 +99,42 @@ class Player:
         voice_channel : discord.VoiceChannel
             The voice channel to join.
         """
+        song_queue = []
+        playing = False
+
         await voice_channel.connect()
         voice_client = self.guild.voice_client
 
         while True:
-            try:
-                url = await asyncio.wait_for(self._queue.get(), QUITE_A_WHILE)
-            except TimeoutError:
-                raise asyncio.CancelledError
-
-            filename = await self._download_url(url)
-            voice_client.play(
-                    discord.FFmpegPCMAudio(filename, **FFMPEG_OPTIONS),
-                    after=lambda _: asyncio.create_task(self._run_events.put(self.FINISHED_EVENT)))
-
+            print("getting")
             event = await self._run_events.get()
-            if event == self.SKIPPED_EVENT:
+            print(event)
+            msg = event[0]
+            if msg == self.QUEUE_EVENT:
+                print("queue")
+                song_queue.append(event[1])
+            elif msg == self.SKIPPED_EVENT:
+                print("skipped")
                 voice_client.stop()
-                await self._run_events.get() # skip finished signal for skipped song
-            elif event == self.FINISHED_EVENT:
-                pass
+            elif msg == self.FINISHED_SONG_EVENT:
+                print("finished song")
+                playing = False
+            elif msg == self.STOPPED_PLAYING_EVENT:
+                print("stopping")
+                asyncio.create_task(self.guild.voice_client.disconnect())
+                self.is_playing = False
+                self._run_task = None
+                self._run_events = asyncio.Queue()
+                return
 
+            if not playing:
+                print("playing song now")
+                playing = True
+                url = song_queue.pop()
+                filename = await self._download_url(url)
+                voice_client.play(
+                        discord.FFmpegPCMAudio(filename, **FFMPEG_OPTIONS),
+                        after=lambda _: asyncio.create_task(self._run_events.put([self.FINISHED_EVENT])))
 
     async def _download_url(self, url: str) -> str:
         """Processes the URL of a song and returns the URL of the audio to be used in FFMPEG.
