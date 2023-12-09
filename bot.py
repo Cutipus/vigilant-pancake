@@ -17,7 +17,7 @@ YTDL_FORMAT_OPTIONS = {
     'quiet': True,
     'no_warnings': True,
     'default_search': 'auto',
-    'source_address': '0.0.0.0', # bind to ipv4 since ipv6 addresses cause issues sometimes
+    'source_address': '0.0.0.0',  # bind to ipv4 since ipv6 addresses cause issues sometimes
 }
 FFMPEG_OPTIONS = {
         'options': '-vn',
@@ -48,6 +48,7 @@ class Player:
     _ytdl : YoutubeDL
         The YoutubeDL downloader.
     """
+
     def __init__(self, client: commands.Bot, guild: discord.Guild):
         self.FINISHED_EVENT = 0
         self.SKIPPED_EVENT = 1
@@ -64,7 +65,7 @@ class Player:
 
     async def queue_song(self, song: str) -> bool:
         """Queues a song for the run loop to play. Returns True if first song and started playing.
-        
+
         Parameters
         ----------
         song : str
@@ -73,15 +74,15 @@ class Player:
         await self._run_events.put([self.QUEUE_EVENT, song])
 
     async def stop_playing(self):
-        """Stops the run loop."""
+        """Stop the run loop."""
         await self._run_events.put([self.STOP_PLAYING_EVENT])
 
     async def skip_song(self):
-        """Sends skip song event to the run loop."""
+        """Send skip song event to the run loop."""
         await self._run_events.put([self.SKIPPED_EVENT])
 
     async def start_playing(self, channel: discord.VoiceChannel):
-        """Creates the run loop task and manages and sets is_playing flag.
+        """Create the run loop task and manages and sets is_playing flag.
 
         Paramters
         ---------
@@ -92,7 +93,7 @@ class Player:
         self._run_task = asyncio.create_task(self._run(channel))
 
     async def _run(self, voice_channel: discord.VoiceChannel):
-        """The player's run loop, responsible for a single session in a voice channel.
+        """Execute the loop responsible for a single session in a voice channel.
 
         Parameters
         ----------
@@ -137,7 +138,7 @@ class Player:
                         after=lambda _: asyncio.create_task(self._run_events.put([self.FINISHED_EVENT])))
 
     async def _download_url(self, url: str) -> str:
-        """Processes the URL of a song and returns the URL of the audio to be used in FFMPEG.
+        """Process the URL of a song and returns the URL of the audio to be used in FFMPEG.
 
         Parameters
         ----------
@@ -157,6 +158,7 @@ class Player:
 
 class Music(commands.Cog):
     """This is the practical implementation of the music bot.
+
     It is responsible for managing the music players for the various guilds, and manage commands.
 
     Attributes
@@ -166,13 +168,14 @@ class Music(commands.Cog):
     players : Dict[discord.Guild, Player]
         A dictionary of all servers connected and their respective music players.
     """
+
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.players = dict()
 
     @commands.Cog.listener()
     async def on_ready(self):
-        """Creates players for all servers the bot is in."""
+        """Create players for all servers the bot is in."""
         print("Initializing music cog...")
         for guild in self.bot.guilds:
             print(f"Creating player for {guild.name}...", end="")
@@ -194,7 +197,10 @@ class Music(commands.Cog):
 
     @commands.command()
     async def sync(self, ctx):
-        """Syncs new slash commands to discord. This should be run when adding, removing or changing slash commands."""
+        """Sync new slash commands to discord.
+
+        This should be run when adding, removing or changing slash commands.
+        """
         print("---Synching slash commands---")
         synced = await self.bot.tree.sync()
         for command in synced:
@@ -208,7 +214,9 @@ class Music(commands.Cog):
 
     @app_commands.command()
     async def play(self, interaction: discord.Interaction, url: str):
-        """Plays a song by URL. If a song is already playing it will be queued."""
+        """Play a song by URL. If a song is already playing it will be queued."""
+        # BUG: Doesn't swap songs properly.
+        # BUG: Ambiguous messages
         print("Play command started...")
         player = self.players[interaction.guild]
 
@@ -228,11 +236,11 @@ class Music(commands.Cog):
 
     @app_commands.command()
     async def stop(self, interaction: discord.Interaction):
-        """Stops the music player."""
+        """Stop the music player."""
         print("Stopping player")
         player = self.players[interaction.guild]
         await player.stop_playing()
-        await interaction.response.send_message(f"Stopped playing")
+        await interaction.response.send_message("Stopped playing") # BUG: doesn't actually return a response
 
     @app_commands.command()
     async def skip(self, interaction: discord.Interaction):
@@ -241,9 +249,11 @@ class Music(commands.Cog):
         player = self.players[interaction.guild]
         await player.skip_song()
         print("Skip message sent")
-        await interaction.response.send_message(f"Skipped song")
+        await interaction.response.send_message("Skipped song")
 
 class Bot(commands.Bot):
+    """The bot"""
+
     def __init__(self):
         intents = discord.Intents.default()
         intents.message_content = True

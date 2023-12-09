@@ -10,6 +10,7 @@ Please note that it does not implement any permissions and rate-limiting options
 ### Dependencies
 * Python 3.11+
 * Requirements in requirements.txt
+* FFMPEG installed
 
 ### Installation and setup
 * Download project directory: `git clone https://github.com/Cutipus/vigilant-pancake`
