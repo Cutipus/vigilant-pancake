@@ -1,3 +1,4 @@
+"""The best music bot that does YouTube for Discord."""
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -75,7 +76,7 @@ class Player:
 
     async def stop_playing(self):
         """Stop the run loop."""
-        await self._run_events.put([self.STOP_PLAYING_EVENT])
+        await self._run_events.put([self.STOPPED_PLAYING_EVENT])
 
     async def skip_song(self):
         """Send skip song event to the run loop."""
@@ -104,7 +105,7 @@ class Player:
         playing = False
 
         await voice_channel.connect()
-        voice_client = self.guild.voice_client
+        voice_client: discord.VoiceClient = self.guild.voice_client
 
         while True:
             print("getting")
@@ -112,14 +113,14 @@ class Player:
             print(event)
             msg = event[0]
             if msg == self.QUEUE_EVENT:
-                print("queue")
                 song_queue.append(event[1])
             elif msg == self.SKIPPED_EVENT:
                 print("skipped")
                 voice_client.stop()
-            elif msg == self.FINISHED_SONG_EVENT:
+            elif msg == self.FINISHED_EVENT:
                 print("finished song")
                 playing = False
+                continue
             elif msg == self.STOPPED_PLAYING_EVENT:
                 print("stopping")
                 asyncio.create_task(self.guild.voice_client.disconnect())
@@ -135,7 +136,7 @@ class Player:
                 filename = await self._download_url(url)
                 voice_client.play(
                         discord.FFmpegPCMAudio(filename, **FFMPEG_OPTIONS),
-                        after=lambda _: asyncio.create_task(self._run_events.put([self.FINISHED_EVENT])))
+                        after=lambda err: self._run_events.put_nowait([self.FINISHED_EVENT, err]))
 
     async def _download_url(self, url: str) -> str:
         """Process the URL of a song and returns the URL of the audio to be used in FFMPEG.
@@ -207,16 +208,9 @@ class Music(commands.Cog):
             print(f"\t{command}")
         print("---")
 
-    #@commands.command()
-    #async def set_bot_channel(self, ctx, *, channel: discord.TextChannel):
-    #    """Sets the main text channel for the bot. All messages should be set to this designated channel."""
-    #    pass
-
     @app_commands.command()
     async def play(self, interaction: discord.Interaction, url: str):
         """Play a song by URL. If a song is already playing it will be queued."""
-        # BUG: Doesn't swap songs properly.
-        # BUG: Ambiguous messages
         print("Play command started...")
         player = self.players[interaction.guild]
 
@@ -240,7 +234,7 @@ class Music(commands.Cog):
         print("Stopping player")
         player = self.players[interaction.guild]
         await player.stop_playing()
-        await interaction.response.send_message("Stopped playing") # BUG: doesn't actually return a response
+        await interaction.response.send_message("Stopped playing")
 
     @app_commands.command()
     async def skip(self, interaction: discord.Interaction):
@@ -251,9 +245,8 @@ class Music(commands.Cog):
         print("Skip message sent")
         await interaction.response.send_message("Skipped song")
 
-class Bot(commands.Bot):
-    """The bot"""
 
+class Bot(commands.Bot):
     def __init__(self):
         intents = discord.Intents.default()
         intents.message_content = True
