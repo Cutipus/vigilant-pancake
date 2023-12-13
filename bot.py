@@ -35,15 +35,17 @@ class Player:
         The bot running the player.
     guild : discord.Guild
         The guild associated with the player. Each player is responsible for only one guild.
-    is_playing : bool
+    is_connected : bool
         Whether or not the player is currently connected to a voice channel.
+    is_playing : bool
+        Whether or not the player is currently playing a song.
+    song_queue : asyncio.Queue[str]
+        The list of songs to play
 
     FINISHED_EVENT : int
         An event signaling the run task to be stopped.
     SKIPPED_EVENT : int
         An event signaling the run task should skip the current song.
-    _queue : asyncio.Queue
-        The queue of the songs to play. Each song is a string url.
     _run_task : asyncio.Task
         The run loop of a single voice channel session. Joins voice channel, plays songs from queue and disconnects afterwrards.
     _ytdl : YoutubeDL
@@ -53,12 +55,13 @@ class Player:
     def __init__(self, client: commands.Bot, guild: discord.Guild):
         self.FINISHED_EVENT = 0
         self.SKIPPED_EVENT = 1
-        self.QUEUE_EVENT = 2
-        self.STOPPED_PLAYING_EVENT = 3
+        self.STOPPED_PLAYING_EVENT = 2
 
+        self.song_queue: asyncio.Queue[str] = asyncio.Queue()
+        self.is_playing = False
         self.client = client
         self.guild = guild
-        self.is_playing = False
+        self.is_connected = False
 
         self._run_events = asyncio.Queue()
         self._ytdl = yt_dlp.YoutubeDL(YTDL_FORMAT_OPTIONS)
@@ -72,26 +75,38 @@ class Player:
         song : str
             The url of the song to play. Needs to be playable by youtube-dl.
         """
-        await self._run_events.put([self.QUEUE_EVENT, song])
+        print("queueing", song)
+        await self.song_queue.put(song)
 
     async def stop_playing(self):
         """Stop the run loop."""
-        await self._run_events.put([self.STOPPED_PLAYING_EVENT])
+        self._run_task.cancel()
 
     async def skip_song(self):
         """Send skip song event to the run loop."""
-        await self._run_events.put([self.SKIPPED_EVENT])
+        self.guild.voice_client.stop()
 
     async def start_playing(self, channel: discord.VoiceChannel):
-        """Create the run loop task and manages and sets is_playing flag.
+        """Create the run loop task and manages and sets is_connected flag.
 
         Paramters
         ---------
         channel: discord.VoiceChannel
             The voice channel to connect to.
         """
-        self.is_playing = True
         self._run_task = asyncio.create_task(self._run(channel))
+
+    async def play_file(self, filename: str):
+        """Play the next song."""
+        # BUG: when exiting it tries to play despite voice_client being None at that point
+        print("playing song now", filename)
+        self.is_playing = True
+        finished_playing = asyncio.Event()
+        self.guild.voice_client.play(
+                source=discord.FFmpegPCMAudio(filename, **FFMPEG_OPTIONS),
+                after=lambda _: finished_playing.set())
+        await finished_playing.wait()
+        print('finished waiting...')
 
     async def _run(self, voice_channel: discord.VoiceChannel):
         """Execute the loop responsible for a single session in a voice channel.
@@ -101,60 +116,19 @@ class Player:
         voice_channel : discord.VoiceChannel
             The voice channel to join.
         """
-        song_queue = []
-        playing = False
+        try:
+            await voice_channel.connect()
+            self.is_connected = True
 
-        await voice_channel.connect()
-        voice_client: discord.VoiceClient = self.guild.voice_client
-
-        while True:
-            print("getting")
-            event = await self._run_events.get()
-            print(event)
-            msg = event[0]
-            if msg == self.QUEUE_EVENT:
-                song_queue.append(event[1])
-            elif msg == self.SKIPPED_EVENT:
-                print("skipped")
-                voice_client.stop()
-            elif msg == self.FINISHED_EVENT:
-                print("finished song")
-                playing = False
-                continue
-            elif msg == self.STOPPED_PLAYING_EVENT:
-                print("stopping")
-                asyncio.create_task(self.guild.voice_client.disconnect())
-                self.is_playing = False
-                self._run_task = None
-                self._run_events = asyncio.Queue()
-                return
-
-            if not playing:
-                print("playing song now")
-                playing = True
-                url = song_queue.pop()
-                filename = await self._download_url(url)
-                voice_client.play(
-                        discord.FFmpegPCMAudio(filename, **FFMPEG_OPTIONS),
-                        after=lambda err: self._run_events.put_nowait([self.FINISHED_EVENT, err]))
-
-    async def _download_url(self, url: str) -> str:
-        """Process the URL of a song and returns the URL of the audio to be used in FFMPEG.
-
-        Parameters
-        ----------
-        url : str
-            The URL of the song to
-        """
-        data = await asyncio.get_running_loop().run_in_executor(
-                None,
-                lambda: self._ytdl.extract_info(url, download=False))
-
-        if 'entries' in data:
-            # first item from playlist
-            data = data['entries'][0]
-
-        return data['url']
+            while True:
+                print("getting new song from list")
+                url = await self.song_queue.get()
+                await self.play_file(url)
+        except asyncio.CancelledError:
+            print("stopping")
+            asyncio.create_task(self.guild.voice_client.disconnect())
+            self.is_connected = False
+            self._run_task = None
 
 
 class Music(commands.Cog):
@@ -173,6 +147,7 @@ class Music(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.players = dict()
+        self._ytdl = yt_dlp.YoutubeDL(YTDL_FORMAT_OPTIONS)
 
     @commands.Cog.listener()
     async def on_ready(self):
@@ -212,21 +187,42 @@ class Music(commands.Cog):
     async def play(self, interaction: discord.Interaction, url: str):
         """Play a song by URL. If a song is already playing it will be queued."""
         print("Play command started...")
+        await interaction.response.defer(thinking=True)
         player = self.players[interaction.guild]
 
-        if not interaction.user.voice and not player.is_playing:
-            await interaction.response.send_message("You need to be in a voice channel to start a play session.")
+        if not interaction.user.voice and not player.is_connected:
+            await interaction.followup.send("You need to be in a voice channel to start a play session.")
             print("User not connected to any voice channel.")
             return
 
-        await player.queue_song(url)
-        if not player.is_playing:
+        elements = await self._process_request(url)
+        output = 'Queued song(s) '
+        for title, url in elements.items():
+            output += '\n' + title
+            await player.queue_song(url)
+        print(output)
+        await interaction.followup.send(output)
+
+        if not player.is_connected:
             await player.start_playing(interaction.user.voice.channel)
-            await interaction.response.send_message(f"Now playing {url}")
-            print("Playing url: ", url)
+
+    async def _process_request(self, request: str) -> dict[str, str]:
+        """Process the URL of a song and returns the URL of the audio to be used in FFMPEG.
+
+        Parameters
+        ----------
+        url : str
+            The URL of the song to
+        """
+        data = await asyncio.get_running_loop().run_in_executor(
+                None,
+                lambda: self._ytdl.extract_info(request, download=False))
+
+        if 'entries' in data:
+            # first item from playlist
+            return {entry['title']: entry['url'] for entry in data['entries']}
         else:
-            await interaction.response.send_message(f"Queued song {url}")
-            print("Queuing url: ", url)
+            return dict(((data['title'], data['url']),))
 
     @app_commands.command()
     async def stop(self, interaction: discord.Interaction):
@@ -269,4 +265,6 @@ async def main():
         print("Starting bot...")
         await bot.start(config["secret_token"])
 
-asyncio.run(main())
+if __name__ == '__main__':
+    # BUG: better exit handling
+    asyncio.run(main())
