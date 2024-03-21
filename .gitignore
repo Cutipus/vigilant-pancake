@@ -1,3 +1,3 @@
 venv/
-config.yaml
-*.png
+__pycache__/
+config.toml
