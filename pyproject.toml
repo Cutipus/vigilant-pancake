@@ -3,10 +3,10 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/discord_music_bot"]
+packages = ["src/tampermint"]
 
 [project]
-name = "discord_music_bot"
+name = "tampermint"
 version = "0.0.1"
 authors = [{ name = "Cutipus", email = "Cutipus@proton.me" }]
 description = "A simple bot for playing music on Discord."

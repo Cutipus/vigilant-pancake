@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import sys
 
 from discord import app_commands
 from discord.ext import commands
@@ -7,6 +8,9 @@ import discord
 import yt_dlp
 
 logger = logging.getLogger(__name__)
+logger.addHandler(logging.StreamHandler(sys.stdout))
+
+
 YTDL_FORMAT_OPTIONS = {
     'format': 'bestaudio/best',
     'restrictfilenames': True,

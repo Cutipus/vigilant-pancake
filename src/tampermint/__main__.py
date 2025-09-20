@@ -3,7 +3,7 @@ import tomllib
 import sys
 import logging
 
-from discord_music_bot.bot import Bot
+from tampermint.bot import Bot
 
 
 logger = logging.getLogger(__name__)

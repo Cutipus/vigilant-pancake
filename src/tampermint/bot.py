@@ -1,13 +1,15 @@
 """The best music bot that does YouTube for Discord."""
 import logging
+import sys
 
 import discord
 from discord.ext import commands
 
-from discord_music_bot import music_cog
+from tampermint import music_cog
 
 
 logger = logging.getLogger(__name__)
+logger.addHandler(logging.StreamHandler(sys.stdout))
 
 
 class Bot(commands.Bot):
