@@ -92,6 +92,7 @@ class Player:
 
     async def skip_song(self):
         """Send skip song event to the run loop."""
+        logger.info(self.guild.voice_client)
         self.guild.voice_client.stop()
         logger.info("Skipped.")
 
@@ -229,11 +230,12 @@ class Music(commands.Cog):
     async def skip(self, interaction: discord.Interaction):
         """Skips the current playing song."""
         logger.info("Skipping song...")
+        await interaction.response.defer(thinking=True)
         assert interaction.guild is not None
         player = self.players[interaction.guild.id]
         await player.skip_song()
-        logger.info("Skip message sent")
         await interaction.followup.send("Skipped song")
+        logger.info("Skip message sent")
 
     @commands.Cog.listener()
     async def on_guild_join(self, guild: discord.Guild):
