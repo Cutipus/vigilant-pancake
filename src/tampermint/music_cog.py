@@ -69,6 +69,7 @@ class Player:
         self.is_playing = False
         self.is_connected = False
         self.logger = logging.getLogger(f"{__name__}:Player:{guild.id}")
+        self.logger.addHandler(logging.StreamHandler(sys.stdout))
 
         self._ytdl = yt_dlp.YoutubeDL(YTDL_FORMAT_OPTIONS)  # type: ignore
         self._run_task: asyncio.Task | None = None
