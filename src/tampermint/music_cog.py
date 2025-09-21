@@ -89,13 +89,13 @@ class Player:
         """Stop the run loop."""
         assert self._run_task is not None
         self._run_task.cancel()
-        logger.info("Stopped.")
+        self.logger.info("Stopped.")
 
     async def skip_song(self):
         """Send skip song event to the run loop."""
-        logger.info(self.guild.voice_client)
+        self.logger.info(self.guild.voice_client)
         self.guild.voice_client.stop()
-        logger.info("Skipped.")
+        self.logger.info("Skipped.")
 
     async def start_playing(self, channel: discord.VoiceChannel):
         """Create the run loop task and manages and sets is_connected flag.
