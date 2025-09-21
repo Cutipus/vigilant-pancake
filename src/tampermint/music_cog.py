@@ -118,14 +118,14 @@ class Player:
             The file to play.
         """
         # BUG: when exiting it tries to play despite voice_client being None at that point
-        self.logger.debug(f"Playing file: {filename}")
+        self.logger.info(f"Playing file: {filename}")
         self.is_playing = True
         finished_playing = asyncio.Event()
         self.guild.voice_client.play(
             source=discord.FFmpegPCMAudio(filename, **FFMPEG_OPTIONS), after=lambda _: finished_playing.set()
         )
         await finished_playing.wait()
-        self.logger.debug(f"Finished playing file: {filename}")
+        self.logger.info(f"Finished playing file: {filename}")
 
     async def _run(self, voice_channel: discord.VoiceChannel):
         """Execute the loop responsible for a single session in a voice channel.
@@ -136,12 +136,12 @@ class Player:
             The voice channel to join.
         """
         try:
-            self.logger.debug("Connecting to voice channel.")
+            self.logger.info("Connecting to voice channel.")
             self.channel = await voice_channel.connect()
             self.is_connected = True
 
             while True:
-                logger.debug("Fetching next song.")
+                logger.info("Fetching next song.")
                 url = await self.song_queue.get()  # TODO: Add timeout
                 await self._play_file(url)
         finally:
