@@ -12,20 +12,20 @@ logger.addHandler(logging.StreamHandler(sys.stdout))
 
 
 YTDL_FORMAT_OPTIONS = {
-    'format': 'bestaudio/best',
-    'restrictfilenames': True,
-    'noplaylist': True,
-    'nocheckcertificate': True,
-    'ignoreerrors': False,
-    'logtostderr': False,
-    'quiet': True,
-    'no_warnings': True,
-    'default_search': 'auto',
-    'source_address': '0.0.0.0',  # bind to ipv4 since ipv6 addresses cause issues sometimes
+    "format": "bestaudio/best",
+    "restrictfilenames": True,
+    "noplaylist": True,
+    "nocheckcertificate": True,
+    "ignoreerrors": False,
+    "logtostderr": False,
+    "quiet": True,
+    "no_warnings": True,
+    "default_search": "auto",
+    "source_address": "0.0.0.0",  # bind to ipv4 since ipv6 addresses cause issues sometimes
 }
 FFMPEG_OPTIONS = {
-        'options': '-vn',
-        'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
+    "options": "-vn",
+    "before_options": "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5",
 }
 
 
@@ -61,18 +61,19 @@ class Player:
         Stop the player.
     """
 
-    def __init__(self, client: commands.Bot, guild: discord.Guild):
+    def __init__(self, client: commands.Cog, guild: discord.Guild):
         self.client = client
         self.guild = guild
+        self.channel: discord.VoiceClient | None = None
         self.song_queue: asyncio.Queue[str] = asyncio.Queue()
         self.is_playing = False
         self.is_connected = False
-        self.logger = logging.getLogger(f'{__name__}:Player:{guild.id}')
+        self.logger = logging.getLogger(f"{__name__}:Player:{guild.id}")
 
-        self._ytdl = yt_dlp.YoutubeDL(YTDL_FORMAT_OPTIONS)
-        self._run_task = None
+        self._ytdl = yt_dlp.YoutubeDL(YTDL_FORMAT_OPTIONS)  # type: ignore
+        self._run_task: asyncio.Task | None = None
 
-    async def queue_song(self, song: str) -> bool:
+    async def queue_song(self, song: str) -> None:
         """Queues a song for the run loop to play. Returns True if first song and started playing.
 
         Parameters
@@ -85,13 +86,14 @@ class Player:
 
     async def stop_playing(self):
         """Stop the run loop."""
+        assert self._run_task is not None
         self._run_task.cancel()
-        self.logger.info("Stopped.")
+        logger.info("Stopped.")
 
     async def skip_song(self):
         """Send skip song event to the run loop."""
         self.guild.voice_client.stop()
-        self.logger.info("Skipped.")
+        logger.info("Skipped.")
 
     async def start_playing(self, channel: discord.VoiceChannel):
         """Create the run loop task and manages and sets is_connected flag.
@@ -101,12 +103,13 @@ class Player:
         channel: discord.VoiceChannel
             The voice channel to connect to.
         """
+        self.voice_channel = channel
         self._run_task = asyncio.create_task(self._run(channel))
         self.logger.info("Started playing.")
 
     async def _play_file(self, filename: str):
         """Play a file.
-        
+
         Parameters
         ----------
         filename : str
@@ -117,8 +120,8 @@ class Player:
         self.is_playing = True
         finished_playing = asyncio.Event()
         self.guild.voice_client.play(
-                source=discord.FFmpegPCMAudio(filename, **FFMPEG_OPTIONS),
-                after=lambda _: finished_playing.set())
+            source=discord.FFmpegPCMAudio(filename, **FFMPEG_OPTIONS), after=lambda _: finished_playing.set()
+        )
         await finished_playing.wait()
         self.logger.debug(f"Finished playing file: {filename}")
 
@@ -132,7 +135,7 @@ class Player:
         """
         try:
             self.logger.debug("Connecting to voice channel.")
-            await voice_channel.connect()
+            self.channel = await voice_channel.connect()
             self.is_connected = True
 
             while True:
@@ -141,7 +144,8 @@ class Player:
                 await self._play_file(url)
         finally:
             self.logger.info("Disconnecting from voice channel.")
-            await self.guild.voice_client.disconnect()
+            assert self.channel is not None
+            await self.channel.disconnect()
             self.is_connected = False
             self._run_task = None
 
@@ -175,16 +179,16 @@ class Music(commands.Cog):
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.players = dict()
-        self._ytdl = yt_dlp.YoutubeDL(YTDL_FORMAT_OPTIONS)
+        self.players: dict[int, Player] = dict()
+        self._ytdl = yt_dlp.YoutubeDL(YTDL_FORMAT_OPTIONS)  # type: ignore
 
     @commands.Cog.listener()
     async def on_ready(self):
         """Create players for all servers the bot is in."""
-        logger.debug("Initializing music cog...")
+        logger.info("Initializing music cog...")
         for guild in self.bot.guilds:
             logger.debug(f"Creating player for {guild.name}...")
-            self.players[guild] = Player(self, guild)
+            self.players[guild.id] = Player(self, guild)
         logger.info("Music cog ready")
 
     @app_commands.command()
@@ -192,13 +196,16 @@ class Music(commands.Cog):
         """Play a song by URL. If a song is already playing it will be queued."""
         logger.debug(f"Playing: {url}")
         await interaction.response.defer(thinking=True)
-        player = self.players[interaction.guild]
+        logger.debug(self.players)
+        logger.debug(interaction.guild)
+        player = self.players[interaction.guild.id]
+        logger.debug(player)
         if not interaction.user.voice and not player.is_connected:
             await interaction.followup.send("You need to be in a voice channel to start a play session.")
             logger.info("User not connected to any voice channel.")
             return
         playlist = await self._parse_url(url)  # consider reworking _get_audio_urls
-        output = 'Queued song(s)\n'
+        output = "Queued song(s)\n"
         for title, url in playlist.items():
             output += f"{title}\n"
             await player.queue_song(url)
@@ -211,23 +218,27 @@ class Music(commands.Cog):
     async def stop(self, interaction: discord.Interaction):
         """Stop the music player."""
         logger.info("Stopping player")
-        player = self.players[interaction.guild]
+        await interaction.response.defer(thinking=True)
+        assert interaction.guild is not None
+        player = self.players[interaction.guild.id]
         await player.stop_playing()
-        await interaction.response.send_message("Stopped playing")
+        await interaction.followup.send("Stopped playing")
+        logger.info("Stopped playing")
 
     @app_commands.command()
     async def skip(self, interaction: discord.Interaction):
         """Skips the current playing song."""
         logger.info("Skipping song...")
-        player = self.players[interaction.guild]
+        assert interaction.guild is not None
+        player = self.players[interaction.guild.id]
         await player.skip_song()
         logger.info("Skip message sent")
-        await interaction.response.send_message("Skipped song")
+        await interaction.followup.send("Skipped song")
 
     @commands.Cog.listener()
-    async def on_guild_join(self, guild):
+    async def on_guild_join(self, guild: discord.Guild):
         """Automatically creates new players for new guilds during runtime."""
-        self.players[guild] = Player(self, guild)
+        self.players[guild.id] = Player(self, guild)
         logger.info(f"Guild joined: {guild}")
 
     @commands.Cog.listener()
@@ -245,19 +256,19 @@ class Music(commands.Cog):
         url : str
             The URL of the song to parse.
         """
-        logger.debug("")
+        logger.info("Parsing URL")
         data = await asyncio.get_running_loop().run_in_executor(
-                None,
-                self._ytdl.extract_info,
-                request,
-                download=False,)
+            None,
+            lambda: self._ytdl.extract_info(request, download=False),
+        )
 
-        if 'entries' in data:
-            return {entry['title']: entry['url'] for entry in data['entries']}
+        logger.info(f"Parsed: {data}")
+        if "entries" in data:
+            return {entry["title"]: entry["url"] for entry in data["entries"]}
         else:
-            return dict(((data['title'], data['url']),))
+            return dict(((data["title"], data["url"]),))
 
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Music(bot))
-    logger.info('loaded Music cog')
+    logger.info("loaded Music cog")

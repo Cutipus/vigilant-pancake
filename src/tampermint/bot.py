@@ -1,11 +1,14 @@
 """The best music bot that does YouTube for Discord."""
+
 import logging
 import sys
 
 import discord
 from discord.ext import commands
+from discord.ext.commands import Context
 
 from tampermint import music_cog
+from tampermint import management_cog
 
 
 logger = logging.getLogger(__name__)
@@ -20,16 +23,10 @@ class Bot(commands.Bot):
 
     async def on_ready(self):
         logger.info("Bot ready!")
-        await music_cog.setup(self)  # extensions don't work with packages??
 
-    @commands.command()
-    async def sync(self, ctx):
-        """Sync new slash commands to discord.
 
-        This should be run when adding, removing or changing slash commands.
-        """
-        logmsg = "---Synching slash commands---\n"
-        synced = await self.bot.tree.sync()
-        for command in synced:
-            logmsg += f"\t{command}\n"
-        logger.info(logmsg)
+async def start_bot(secret):
+    bot = Bot()
+    await music_cog.setup(bot)
+    await management_cog.setup(bot)
+    await bot.start(secret)
